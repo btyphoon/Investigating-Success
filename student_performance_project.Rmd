@@ -1,0 +1,367 @@
+---
+title: "Student Performance Analysis"
+author: "Team Name"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    code_folding: show
+    toc: true
+    toc_float: true
+    theme: flatly
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+# 1. Introduction
+
+This project investigates how student behavioral and environmental factors relate to academic performance. We use the **Student Performance Dataset** (6,607 observations, sourced from Kaggle, updated March 2026) to answer two SMART questions:
+
+1. Which combination of behavioral and environmental factors most strongly predicts **Final Exam Score**, and how much variance do they explain?
+2. After categorizing students as passing or failing, can we accurately **identify at-risk students**, and which factors are the strongest predictors of failure?
+
+---
+
+# 2. Load Libraries and Data
+
+```{r load}
+# Install any missing packages before running:
+# install.packages(c("ggplot2", "corrplot", "car", "pROC", "rpart", "rpart.plot", "dplyr", "caret"))
+
+#install.packages(c("ggplot2", "corrplot", "car", "pROC", "rpart", "rpart.plot", "dplyr", "caret"))
+
+library(ggplot2)
+library(corrplot)
+library(car)
+library(pROC)
+library(rpart)
+library(rpart.plot)
+library(dplyr)
+library(caret)
+
+# Load data
+setwd("~/Desktop/DS_Project_2")
+list.files()
+df <- read.csv("student_dataset (1).csv")
+
+# Quick look
+dim(df)
+head(df)
+str(df)
+```
+
+---
+
+# 3. Data Cleaning & Preparation
+
+```{r clean}
+# Check for missing values
+colSums(is.na(df))
+
+# Convert categorical variables to factors
+df$Parental_Involvement      <- as.factor(df$Parental_Involvement)
+df$Access_to_Resources       <- as.factor(df$Access_to_Resources)
+df$Extracurricular_Activities <- as.factor(df$Extracurricular_Activities)
+df$Motivation_Level          <- as.factor(df$Motivation_Level)
+df$Internet_Access           <- as.factor(df$Internet_Access)
+
+# Confirm structure
+str(df)
+```
+
+---
+
+# 4. Exploratory Data Analysis (EDA)
+
+## 4.1 Summary Statistics
+
+```{r summary}
+summary(df)
+```
+
+## 4.2 Distribution of Final Exam Score
+
+```{r hist}
+ggplot(df, aes(x = Final_Exam_Score)) +
+  geom_histogram(binwidth = 2, fill = "steelblue", color = "white") +
+  labs(title = "Distribution of Final Exam Score",
+       x = "Final Exam Score", y = "Count") +
+  theme_minimal()
+```
+
+## 4.3 Correlation Matrix (Numeric Variables)
+
+```{r corrplot}
+# Select only numeric columns
+num_vars <- df %>% select(Hours_Studied, Attendance, Sleep_Hours,
+                           Previous_Scores, Tutoring_Sessions, Final_Exam_Score)
+
+cor_matrix <- cor(num_vars)
+corrplot(cor_matrix, method = "color", type = "upper",
+         tl.col = "black", addCoef.col = "black", number.cex = 0.7,
+         title = "Correlation Matrix", mar = c(0,0,1,0))
+```
+
+## 4.4 Scatterplots: Key Predictors vs Final Exam Score
+
+```{r scatter}
+# Hours Studied vs Final Score
+ggplot(df, aes(x = Hours_Studied, y = Final_Exam_Score)) +
+  geom_point(alpha = 0.3, color = "steelblue") +
+  geom_smooth(method = "lm", color = "red") +
+  labs(title = "Hours Studied vs Final Exam Score") +
+  theme_minimal()
+
+# Previous Scores vs Final Score
+ggplot(df, aes(x = Previous_Scores, y = Final_Exam_Score)) +
+  geom_point(alpha = 0.3, color = "darkorange") +
+  geom_smooth(method = "lm", color = "red") +
+  labs(title = "Previous Scores vs Final Exam Score") +
+  theme_minimal()
+
+# Attendance vs Final Score
+ggplot(df, aes(x = Attendance, y = Final_Exam_Score)) +
+  geom_point(alpha = 0.3, color = "darkgreen") +
+  geom_smooth(method = "lm", color = "red") +
+  labs(title = "Attendance vs Final Exam Score") +
+  theme_minimal()
+```
+
+## 4.5 Boxplots: Categorical Variables vs Final Exam Score
+
+```{r boxplots}
+# Parental Involvement
+ggplot(df, aes(x = Parental_Involvement, y = Final_Exam_Score, fill = Parental_Involvement)) +
+  geom_boxplot() +
+  labs(title = "Final Exam Score by Parental Involvement") +
+  theme_minimal() + theme(legend.position = "none")
+
+# Access to Resources
+ggplot(df, aes(x = Access_to_Resources, y = Final_Exam_Score, fill = Access_to_Resources)) +
+  geom_boxplot() +
+  labs(title = "Final Exam Score by Access to Resources") +
+  theme_minimal() + theme(legend.position = "none")
+
+# Motivation Level
+ggplot(df, aes(x = Motivation_Level, y = Final_Exam_Score, fill = Motivation_Level)) +
+  geom_boxplot() +
+  labs(title = "Final Exam Score by Motivation Level") +
+  theme_minimal() + theme(legend.position = "none")
+
+# Internet Access
+ggplot(df, aes(x = Internet_Access, y = Final_Exam_Score, fill = Internet_Access)) +
+  geom_boxplot() +
+  labs(title = "Final Exam Score by Internet Access") +
+  theme_minimal() + theme(legend.position = "none")
+
+# Extracurricular Activities
+ggplot(df, aes(x = Extracurricular_Activities, y = Final_Exam_Score, fill = Extracurricular_Activities)) +
+  geom_boxplot() +
+  labs(title = "Final Exam Score by Extracurricular Activities") +
+  theme_minimal() + theme(legend.position = "none")
+```
+
+---
+
+# 5. SMART Question 1: Multiple Linear Regression
+
+**Which combination of factors most strongly predicts Final Exam Score?**
+
+## 5.1 Full Model
+
+```{r lm_full}
+lm_full <- lm(Final_Exam_Score ~ ., data = df)
+summary(lm_full)
+```
+
+## 5.2 Variable Selection (Stepwise AIC)
+
+```{r stepwise}
+lm_step <- step(lm_full, direction = "both", trace = 0)
+summary(lm_step)
+```
+
+## 5.3 Model Diagnostics
+
+```{r diagnostics}
+par(mfrow = c(2, 2))
+plot(lm_step)
+par(mfrow = c(1, 1))
+```
+
+```{r vif}
+# Check for multicollinearity (VIF)
+# Only works cleanly if no aliased coefficients remain
+vif(lm_step)
+```
+
+## 5.4 Interpretation
+
+```{r lm_results}
+# Coefficients and confidence intervals
+coef(summary(lm_step))
+confint(lm_step)
+
+# Adjusted R-squared
+summary(lm_step)$adj.r.squared
+```
+
+> **Interpretation:** The adjusted R² tells us what proportion of variance in Final Exam Score is explained by the model. Significant predictors (p < 0.05) are the key behavioral/environmental factors. Positive coefficients mean that variable increases predicted score; negative means the opposite.
+
+---
+
+# 6. SMART Question 2: Logistic Regression & Decision Tree
+
+**Can we identify at-risk (failing) students, and which factors predict failure?**
+
+## 6.1 Create Pass/Fail Variable
+
+```{r passfail}
+# Define passing as Final Exam Score >= 60
+df$Pass <- ifelse(df$Final_Exam_Score >= 60, 1, 0)
+df$Pass <- as.factor(df$Pass)
+
+table(df$Pass)
+prop.table(table(df$Pass))
+```
+
+## 6.2 Train/Test Split
+
+```{r split}
+set.seed(123)
+train_index <- createDataPartition(df$Pass, p = 0.75, list = FALSE)
+train <- df[train_index, ]
+test  <- df[-train_index, ]
+
+cat("Training rows:", nrow(train), "\n")
+cat("Test rows:    ", nrow(test), "\n")
+```
+
+## 6.3 Logistic Regression
+
+```{r logistic}
+# Drop Final_Exam_Score from predictors (we created Pass from it)
+log_model <- glm(Pass ~ Hours_Studied + Attendance + Sleep_Hours +
+                   Previous_Scores + Tutoring_Sessions +
+                   Parental_Involvement + Access_to_Resources +
+                   Motivation_Level + Internet_Access +
+                   Extracurricular_Activities,
+                 data = train, family = binomial)
+
+summary(log_model)
+```
+
+## 6.4 Stepwise Variable Selection for Logistic Model
+
+```{r log_step}
+log_step <- step(log_model, direction = "both", trace = 0)
+summary(log_step)
+```
+
+## 6.5 Predictions & Confusion Matrix
+
+```{r confusion}
+# Predict on test set
+log_probs <- predict(log_step, newdata = test, type = "response")
+log_preds <- ifelse(log_probs > 0.5, 1, 0)
+log_preds <- as.factor(log_preds)
+
+# Confusion Matrix
+confusionMatrix(log_preds, test$Pass, positive = "1")
+```
+
+## 6.6 ROC Curve & AUC
+
+```{r roc}
+roc_obj <- roc(as.numeric(test$Pass), log_probs)
+plot(roc_obj, col = "steelblue", main = "ROC Curve - Logistic Regression")
+auc(roc_obj)
+```
+
+## 6.7 Decision Tree
+
+```{r tree}
+tree_model <- rpart(Pass ~ Hours_Studied + Attendance + Sleep_Hours +
+                      Previous_Scores + Tutoring_Sessions +
+                      Parental_Involvement + Access_to_Resources +
+                      Motivation_Level + Internet_Access +
+                      Extracurricular_Activities,
+                    data = train, method = "class",
+                    control = rpart.control(cp = 0.01))
+
+# Plot the tree
+rpart.plot(tree_model, type = 4, extra = 104,
+           main = "Decision Tree: Predicting Pass/Fail")
+```
+
+## 6.8 Decision Tree Predictions & Evaluation
+
+```{r tree_eval}
+tree_preds <- predict(tree_model, newdata = test, type = "class")
+
+confusionMatrix(tree_preds, test$Pass, positive = "1")
+```
+
+## 6.9 Variable Importance (Decision Tree)
+
+```{r varimp}
+importance <- tree_model$variable.importance
+importance_df <- data.frame(Variable = names(importance), Importance = importance)
+importance_df <- importance_df[order(-importance_df$Importance), ]
+
+ggplot(importance_df, aes(x = reorder(Variable, Importance), y = Importance)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  coord_flip() +
+  labs(title = "Variable Importance - Decision Tree",
+       x = "Variable", y = "Importance") +
+  theme_minimal()
+```
+
+---
+
+# 7. Model Comparison
+
+```{r compare}
+# Logistic Regression accuracy
+log_acc <- mean(log_preds == test$Pass)
+
+# Decision Tree accuracy
+tree_acc <- mean(tree_preds == test$Pass)
+
+comparison <- data.frame(
+  Model    = c("Logistic Regression", "Decision Tree"),
+  Accuracy = round(c(log_acc, tree_acc), 4)
+)
+
+print(comparison)
+```
+
+> **Discussion:** Compare which model has higher accuracy, sensitivity (catching failing students), and specificity. A model with high sensitivity is preferable here because missing at-risk students has a higher cost than a false alarm.
+
+---
+
+# 8. Conclusion
+
+**SMART Question 1 (Linear Regression):**
+The multiple linear regression model identified [summarize key significant variables] as the strongest predictors of Final Exam Score, explaining approximately [insert adj. R²]% of the variance. [Add 2-3 sentences of interpretation based on your output.]
+
+**SMART Question 2 (Classification):**
+Both logistic regression and the decision tree performed well in identifying at-risk students. [Summarize which model was better and why.] The most important predictors of failure were [insert top variables from variable importance plot].
+
+**Limitations:**
+- The dataset is from Kaggle and may not generalize to all student populations.
+- Some important confounders (e.g., school quality, socioeconomic status) are not captured.
+- The pass/fail threshold of 60 is an assumption and could be adjusted.
+
+**Future Work:**
+- Try random forests or gradient boosting for improved predictive accuracy.
+- Gather longitudinal data to study trends over time.
+
+---
+
+# References
+
+- Dataset: Kaggle — Student Performance Dataset (Updated March 2026)
+- James, G., Witten, D., Hastie, T., & Tibshirani, R. (2021). *An Introduction to Statistical Learning*. Springer.
+- Todaro, M. P., & Smith, S. C. (2020). *Economic Development*. Pearson.
